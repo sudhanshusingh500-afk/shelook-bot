@@ -7,11 +7,9 @@ app = Flask(__name__)
 CORS(app) 
 
 # --- CONFIGURATION ---
-API_KEY = os.environ.get("GOOGLE_API_KEY")
-
-# We use the direct URL for Gemini 1.5 Flash
-# This bypasses library version issues
-API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={API_KEY}"
+# We now look for the GROQ key
+API_KEY = os.environ.get("GROQ_API_KEY")
+API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 SYSTEM_INSTRUCTION = """
 You are the helpful, polite, and elegant customer support AI for 'SHELOOK', a premium silver jewelry brand.
@@ -55,36 +53,36 @@ def get_ai_response(user_message):
     if not API_KEY:
         return "Error: Server API Key is missing."
 
-    # Construct the JSON payload for Google
-    payload = {
-        "contents": [{
-            "parts": [{"text": f"{SYSTEM_INSTRUCTION}\n\nUSER QUESTION: {user_message}"}]
-        }]
+    headers = {
+        "Authorization": f"Bearer {API_KEY}",
+        "Content-Type": "application/json"
     }
 
-    headers = {'Content-Type': 'application/json'}
+    # Groq uses the same format as OpenAI
+    payload = {
+        "model": "llama3-8b-8192",  # This is the fast, free model
+        "messages": [
+            {"role": "system", "content": SYSTEM_INSTRUCTION},
+            {"role": "user", "content": user_message}
+        ],
+        "temperature": 0.5
+    }
 
     try:
         response = requests.post(API_URL, json=payload, headers=headers)
         
-        # Check if Google accepted it
         if response.status_code == 200:
             data = response.json()
-            # Extract the text answer
-            # We add a safety check here in case Google returns an empty answer
-            try:
-                return data['candidates'][0]['content']['parts'][0]['text']
-            except (KeyError, IndexError):
-                return "I'm having a bit of trouble thinking right now. Please try again."
+            return data['choices'][0]['message']['content']
         else:
-            return f"Error from Google: {response.status_code} - {response.text}"
+            return f"Error from Groq: {response.status_code} - {response.text}"
             
     except Exception as e:
         return f"Connection Error: {str(e)}"
 
 @app.route('/', methods=['GET'])
 def home():
-    return "SHELOOK AI Bot is Running (Direct Mode)!"
+    return "SHELOOK AI Bot is Running (Groq Mode)!"
 
 @app.route('/api/chat', methods=['POST'])
 def chat():
