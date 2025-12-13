@@ -57,7 +57,7 @@ Contact: +91-74392-28282 | support@shelook.in
 # --- THE MODEL ---
 def get_ai_response(user_message):
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-pro')
         
         # We send the system instruction + the user message
         prompt = f"{SYSTEM_INSTRUCTION}\n\nUSER QUESTION: {user_message}"
@@ -86,4 +86,5 @@ def chat():
     return jsonify({"reply": ai_reply})
 
 if __name__ == '__main__':
+
     app.run(host='0.0.0.0', port=5000)
