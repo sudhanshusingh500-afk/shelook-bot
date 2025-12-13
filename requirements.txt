@@ -1,4 +1,6 @@
 flask
 flask-cors
-gunicorn
 requests
+groq
+gunicorn
+python-dotenv
