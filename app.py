@@ -7,7 +7,6 @@ app = Flask(__name__)
 CORS(app) 
 
 # --- CONFIGURATION ---
-# We now look for the GROQ key
 API_KEY = os.environ.get("GROQ_API_KEY")
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
@@ -58,9 +57,8 @@ def get_ai_response(user_message):
         "Content-Type": "application/json"
     }
 
-    # Groq uses the same format as OpenAI
     payload = {
-        "model": "llama3-8b-8192",  # This is the fast, free model
+        "model": "llama-3.3-70b-versatile", # Updated to the latest Llama 3.3
         "messages": [
             {"role": "system", "content": SYSTEM_INSTRUCTION},
             {"role": "user", "content": user_message}
@@ -82,7 +80,7 @@ def get_ai_response(user_message):
 
 @app.route('/', methods=['GET'])
 def home():
-    return "SHELOOK AI Bot is Running (Groq Mode)!"
+    return "SHELOOK AI Bot is Running (Groq Llama 3.3 Mode)!"
 
 @app.route('/api/chat', methods=['POST'])
 def chat():
