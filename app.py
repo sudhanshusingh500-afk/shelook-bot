@@ -1,18 +1,17 @@
 import os
-import logging
+import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import google.generativeai as genai
 
 app = Flask(__name__)
 CORS(app) 
 
-# Setup Logging so we can see errors in Render Dashboard
-logging.basicConfig(level=logging.INFO)
+# --- CONFIGURATION ---
+API_KEY = os.environ.get("GOOGLE_API_KEY")
 
-GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
-if GOOGLE_API_KEY:
-    genai.configure(api_key=GOOGLE_API_KEY)
+# We use the direct URL for Gemini 1.5 Flash
+# This bypasses library version issues
+API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={API_KEY}"
 
 SYSTEM_INSTRUCTION = """
 You are the helpful, polite, and elegant customer support AI for 'SHELOOK', a premium silver jewelry brand.
@@ -53,34 +52,35 @@ Contact: +91-74392-28282 | support@shelook.in
 """
 
 def get_ai_response(user_message):
-    # List of models to try in order. One of these WILL work.
-    models_to_try = [
-        'gemini-1.5-flash',
-        'gemini-1.5-flash-latest',
-        'gemini-pro',
-        'gemini-1.0-pro'
-    ]
-    
-    last_error = ""
+    if not API_KEY:
+        return "Error: Server API Key is missing."
 
-    for model_name in models_to_try:
-        try:
-            print(f"Trying model: {model_name}...")
-            model = genai.GenerativeModel(model_name)
-            prompt = f"{SYSTEM_INSTRUCTION}\n\nUSER QUESTION: {user_message}"
-            response = model.generate_content(prompt)
-            return response.text
-        except Exception as e:
-            last_error = str(e)
-            print(f"Model {model_name} failed: {e}")
-            continue # Try the next model in the list
+    # Construct the JSON payload for Google
+    payload = {
+        "contents": [{
+            "parts": [{"text": f"{SYSTEM_INSTRUCTION}\n\nUSER QUESTION: {user_message}"}]
+        }]
+    }
 
-    # If all fail, return the error
-    return f"I apologize, I am having connection issues. (Debug: {last_error})"
+    headers = {'Content-Type': 'application/json'}
+
+    try:
+        response = requests.post(API_URL, json=payload, headers=headers)
+        
+        # Check if Google accepted it
+        if response.status_code == 200:
+            data = response.json()
+            # Extract the text answer
+            return data['candidates'][0]['content']['parts'][0]['text']
+        else:
+            return f"Error from Google: {response.status_code} - {response.text}"
+            
+    except Exception as e:
+        return f"Connection Error: {str(e)}"
 
 @app.route('/', methods=['GET'])
 def home():
-    return "SHELOOK AI Bot is Running!"
+    return "SHELOOK AI Bot is Running (Direct Mode)!"
 
 @app.route('/api/chat', methods=['POST'])
 def chat():
