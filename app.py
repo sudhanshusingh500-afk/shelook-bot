@@ -71,7 +71,11 @@ def get_ai_response(user_message):
         if response.status_code == 200:
             data = response.json()
             # Extract the text answer
-            return data['candidates'][0]['content']['parts'][0]['text']
+            # We add a safety check here in case Google returns an empty answer
+            try:
+                return data['candidates'][0]['content']['parts'][0]['text']
+            except (KeyError, IndexError):
+                return "I'm having a bit of trouble thinking right now. Please try again."
         else:
             return f"Error from Google: {response.status_code} - {response.text}"
             
