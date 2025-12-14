@@ -6,160 +6,93 @@ from flask_cors import CORS
 from groq import Groq
 
 app = Flask(__name__)
-CORS(app)  # Allow your Shopify site to talk to this server
+CORS(app)
 
-# 1. CONFIGURATION
-# Render will pull these from your Environment Variables
+# 1. SETUP
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-SHOPIFY_URL = os.environ.get("SHOPIFY_STORE_URL") # e.g. shelook.myshopify.com
+SHOPIFY_URL = os.environ.get("SHOPIFY_STORE_URL")
 SHOPIFY_TOKEN = os.environ.get("SHOPIFY_ADMIN_TOKEN")
 
 client = Groq(api_key=GROQ_API_KEY)
 
-# --- 2. THE HANDS (Shopify Functions) ---
-
+# 2. SHOPIFY TOOLS (HANDS)
 def get_shopify_order(order_id):
-    """Fetch order details from Shopify by Name (e.g., SL1001)"""
     url = f"https://{SHOPIFY_URL}/admin/api/2024-01/orders.json?name={order_id}&status=any"
     headers = {"X-Shopify-Access-Token": SHOPIFY_TOKEN}
-    
     try:
         response = requests.get(url, headers=headers)
         data = response.json()
-        if not data.get('orders'):
-            return None
+        if not data.get('orders'): return None
         return data['orders'][0]
-    except Exception as e:
-        print(f"Shopify Error: {e}")
-        return None
+    except: return None
 
-def check_order_status(order_id):
+def check_status(order_id):
     order = get_shopify_order(order_id)
-    if not order:
-        return f"I could not find Order {order_id}. Please double-check the ID."
-
-    fulfillment = order.get('fulfillment_status') or "Unfulfilled (Processing)"
-    payment = order.get('financial_status')
+    if not order: return "Order not found. Check ID."
     
-    tracking_msg = "No tracking number yet."
+    status = order.get('fulfillment_status') or "Unfulfilled"
+    tracking = "No tracking yet"
     if order.get('fulfillments'):
-        # Get the first fulfillment
-        fulfillment_data = order['fulfillments'][0]
-        tracking_number = fulfillment_data.get('tracking_number')
-        tracking_url = fulfillment_data.get('tracking_url')
-        
-        if tracking_url:
-            tracking_msg = f"Tracking Link: {tracking_url}"
-        elif tracking_number:
-            tracking_msg = f"Tracking Number: {tracking_number}"
+        t = order['fulfillments'][0]
+        tracking = t.get('tracking_url') or t.get('tracking_number')
+    
+    return f"📦 Status: {status}\nTracking: {tracking}"
 
-    return (f"📦 **Order {order['name']} Status:**\n"
-            f"- Status: {fulfillment}\n"
-            f"- Payment: {payment}\n"
-            f"- {tracking_msg}")
-
-def try_cancel_order(order_id):
+def cancel_order(order_id):
     order = get_shopify_order(order_id)
-    if not order:
-        return "Order not found."
-
-    # POLICY: Cannot cancel if shipped
+    if not order: return "Order not found."
     if order.get('fulfillment_status') == 'fulfilled':
-        return ("⚠️ **Cancellation Failed:**\n"
-                "Your order has already been shipped. We cannot cancel it now. "
-                "Please reach out to us for a return after delivery.")
-
-    # Execute Cancellation
+        return "⚠️ Cannot cancel: Order already shipped."
+    
     try:
-        cancel_url = f"https://{SHOPIFY_URL}/admin/api/2024-01/orders/{order['id']}/cancel.json"
-        headers = {"X-Shopify-Access-Token": SHOPIFY_TOKEN}
-        requests.post(cancel_url, headers=headers, json={})
-        return ("✅ **Success:** Your order has been cancelled. "
-                "You will receive a refund confirmation email shortly.")
-    except Exception as e:
-        return "❌ **Error:** Technical issue cancelling. Please email support@shelook.com."
+        url = f"https://{SHOPIFY_URL}/admin/api/2024-01/orders/{order['id']}/cancel.json"
+        requests.post(url, headers={"X-Shopify-Access-Token": SHOPIFY_TOKEN}, json={})
+        return "✅ Success: Order cancelled."
+    except: return "❌ Error cancelling order."
 
-# --- 3. THE BRAIN (Groq AI) ---
-
+# 3. CHAT ROUTE (BRAIN)
 @app.route('/chat', methods=['POST'])
 def chat():
     data = request.json
-    user_message = data.get('message')
+    msg = data.get('message')
     email = data.get('email')
     order_id = data.get('orderId')
 
-    # SYSTEM PROMPT
     system_prompt = f"""
-    You are the SHELOOK Jewelry Assistant.
-    
-    GOALS:
-    1. Answer general questions about jewelry, styling, and care friendly and briefly.
-    2. Handle Order Tasks (Status, Cancel) strictly using tools.
-
-    RULES:
-    - If user asks for Status or Cancel, you MUST have their Email and Order ID.
-    - If Email is missing -> Ask for it.
-    - If Order ID is missing -> Ask for it.
-    - If BOTH are present -> Use the Tool 'check_status' or 'cancel_order'.
-
-    CONTEXT:
-    - User Email: {email if email else "Unknown"}
-    - User Order ID: {order_id if order_id else "Unknown"}
+    You are SHELOOK Support.
+    1. General Qs: Answer briefly and friendly.
+    2. Tasks (Status/Cancel): MUST have Email & Order ID.
+       - If missing -> Ask user.
+       - If present -> Use tool 'check_status' or 'cancel_order'.
+    User Context: Email={email}, ID={order_id}
     """
 
     tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "check_status",
-                "description": "Check order status and tracking",
-                "parameters": {"type": "object", "properties": {}}
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "cancel_order",
-                "description": "Cancel an order if not shipped",
-                "parameters": {"type": "object", "properties": {}}
-            }
-        }
+        {"type": "function", "function": {"name": "check_status", "description": "Check status", "parameters": {"type": "object", "properties": {}}}},
+        {"type": "function", "function": {"name": "cancel_order", "description": "Cancel order", "parameters": {"type": "object", "properties": {}}}}
     ]
 
     try:
-        # A. Ask Groq
         completion = client.chat.completions.create(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message}
-            ],
+            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": msg}],
             model="llama3-70b-8192",
             tools=tools,
             tool_choice="auto"
         )
+        
+        reply = completion.choices[0].message.content
+        tool_calls = completion.choices[0].message.tool_calls
 
-        response_message = completion.choices[0].message
-        reply = response_message.content
-        tool_calls = response_message.tool_calls
-
-        # B. If Groq wants to use a Tool
         if tool_calls:
-            if not order_id:
-                 reply = "I can help, but I need your Order ID (e.g., SL1001) first."
+            if not order_id: reply = "Please provide your Order ID first."
             else:
-                tool_call_id = tool_calls[0].id
-                function_name = tool_calls[0].function.name
-                
-                if function_name == "check_status":
-                    reply = check_order_status(order_id)
-                elif function_name == "cancel_order":
-                    reply = try_cancel_order(order_id)
+                fn = tool_calls[0].function.name
+                if fn == "check_status": reply = check_status(order_id)
+                if fn == "cancel_order": reply = cancel_order(order_id)
 
         return jsonify({"reply": reply})
-
     except Exception as e:
-        print(f"Error: {e}")
-        return jsonify({"reply": "Sorry, my brain is offline. Please try again."}), 500
+        return jsonify({"reply": "System Error. Please try again."})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
