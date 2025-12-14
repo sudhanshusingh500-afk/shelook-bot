@@ -118,7 +118,7 @@ class BusinessLogic:
         return f"📦 **Order {order['name']}**<br>Payment: {financial}<br>Status: {status}<br>Tracking: {track_link}"
 
 # ==========================================
-# BLOCK 4: MAIN APP ROUTE
+# BLOCK 4: MAIN APP ROUTE (Updated for Phase 1: Smart Stylist)
 # ==========================================
 @app.route('/chat', methods=['POST'])
 def chat():
@@ -133,21 +133,38 @@ def chat():
         extracted_order = re.search(r'(SL\s*\d+)', msg, re.IGNORECASE)
         order_id = data.get('orderId') or (extracted_order.group(1).upper().replace(" ", "") if extracted_order else None)
 
-        # 2. Define Tools
+        # 2. Define Tools (Same as before)
         tools = [
             {"type": "function", "function": {"name": "check_status", "description": "Check status", "parameters": {"type": "object", "properties": {"user_email": {"type": "string"}}, "required": ["user_email"]}}},
             {"type": "function", "function": {"name": "find_product", "description": "Search product", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
             {"type": "function", "function": {"name": "cancel_order", "description": "Cancel order", "parameters": {"type": "object", "properties": {"user_email": {"type": "string"}}, "required": ["user_email"]}}}
         ]
 
-        # 3. System Prompt
+        # 3. System Prompt (THE BRAIN UPGRADE)
         system_prompt = f"""
-        You are the SHELOOK Jewelry Assistant.
+        You are the SHELOOK Jewelry Assistant. You are a helpful Store Manager and Stylist.
+
+        **CORE RULES (DO NOT BREAK):**
+        1. **Order Tasks:** - FIRST ask for Order ID. WAIT. 
+           - THEN ask for Email. WAIT.
+           - ONLY then call 'check_status' or 'cancel_order'.
         
-        RULES:
-        1. **Flow:** Ask for Order ID first. Wait. Then ask for Email. Wait.
-        2. **Status/Cancel:** Use tools 'check_status' or 'cancel_order' only when you have BOTH.
-        3. **Products:** Use 'find_product'.
+        **PHASE 1: SALES & STYLING RULES:**
+        1. **Cross-Selling:** - If a user asks about a **Necklace**, ALWAYS suggest matching **Earrings/Jhumkas** to complete the look.
+           - Use 'find_product' to find the matching item link.
+           
+        2. **Gift Finder:**
+           - If user mentions "Gift" or "Present", DO NOT just search immediately.
+           - ASK: "I'd love to help! What is your **Budget**, the **Occasion**, and their **Style** (Modern vs Traditional)?"
+           
+        3. **Ring Sizing:**
+           - If user asks about ring size, SAY: "Wrap a thread around your finger, measure it with a ruler (mm), and check our chart."
+           - **CRITICAL:** ALWAYS add: "If you are unsure, I recommend our **Adjustable Rings** which fit everyone!" 
+           - Then use 'find_product' to search for "Adjustable Ring".
+
+        **GENERAL:** - Keep answers short and friendly. 
+        - Use HTML (<b>, <br>) for formatting.
+        - Never say "I am an AI".
 
         Context: Email={email}, OrderID={order_id}
         """
@@ -163,7 +180,7 @@ def chat():
         reply = completion.choices[0].message.content
         tool_calls = completion.choices[0].message.tool_calls
 
-        # 5. Tool Execution Logic
+        # 5. Tool Execution Logic (Unchanged)
         if tool_calls:
             fn = tool_calls[0].function.name
             args = json.loads(tool_calls[0].function.arguments)
@@ -179,7 +196,6 @@ def chat():
                     order = ShopifyClient.get_order(order_id)
                     if not order: reply = "Order not found."
                     else:
-                        # LENIENT CHECK
                         is_allowed = BusinessLogic.verify_user(order, args.get('user_email', email), "status")
                         if is_allowed: reply = BusinessLogic.format_status(order)
                         else: reply = "⚠️ Verification Failed. Email mismatch."
@@ -191,12 +207,9 @@ def chat():
                     order = ShopifyClient.get_order(order_id)
                     if not order: reply = "Order not found."
                     else:
-                        # STRICT CHECK
                         is_allowed = BusinessLogic.verify_user(order, args.get('user_email', email), "cancel")
-                        if is_allowed:
-                             reply = f"To cancel Order {order_id}, please email support@shelook.com."
-                        else: 
-                             reply = "⚠️ **Security Alert:** Email mismatch. Cannot process cancellation."
+                        if is_allowed: reply = f"To cancel Order {order_id}, please email support@shelook.com."
+                        else: reply = "⚠️ **Security Alert:** Email mismatch. Cannot process cancellation."
 
         return jsonify({"reply": reply, "found_email": email, "found_orderId": order_id})
 
