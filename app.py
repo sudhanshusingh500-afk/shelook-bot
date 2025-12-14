@@ -118,7 +118,7 @@ class BusinessLogic:
         return f"📦 **Order {order['name']}**<br>Payment: {financial}<br>Status: {status}<br>Tracking: {track_link}"
 
 # ==========================================
-# BLOCK 4: MAIN APP ROUTE (Stable: Category Mapping Approach)
+# BLOCK 4: MAIN APP ROUTE (Corrected: Mapping + Robust Search)
 # ==========================================
 @app.route('/chat', methods=['POST'])
 def chat():
@@ -127,7 +127,7 @@ def chat():
         msg = data.get('message', '')
         history = data.get('history', []) 
         
-        # 1. Extract Details (Safe Mode)
+        # 1. Extract Details
         email = data.get('email')
         order_id = data.get('orderId')
 
@@ -137,7 +137,7 @@ def chat():
             {"type": "function", "function": {"name": "check_status", "description": "Check order status", "parameters": {"type": "object", "properties": {"user_email": {"type": "string"}}, "required": ["user_email"]}}}
         ]
 
-        # 3. System Prompt (THE NEW STRATEGY)
+        # 3. System Prompt (THE SMART MAPPING STRATEGY)
         system_prompt = f"""
         You are the SHELOOK Jewelry Assistant.
 
@@ -162,7 +162,7 @@ def chat():
         - Use HTML formatting.
         """
 
-        # 4. Construct Message
+        # 4. Construct Message Payload
         messages_payload = [{"role": "system", "content": system_prompt}] + history + [{"role": "user", "content": msg}]
 
         # 5. AI Call
@@ -176,51 +176,67 @@ def chat():
         reply = completion.choices[0].message.content or ""
         tool_calls = completion.choices[0].message.tool_calls
 
-        # 6. Tool Execution (Defensive Coding)
+        # 6. Tool Execution Logic (Robust Split-Search)
         if tool_calls:
             for tool in tool_calls:
                 fn = tool.function.name
+                
                 try:
                     args = json.loads(tool.function.arguments)
-                    
-                   # Inside your chat() function, under "if tool_calls:"
+                    tool_result = ""
 
-if fn == "find_product":
-    raw_query = args.get('query', '')
-    print(f"Original Query: {raw_query}")
+                    if fn == "find_product":
+                        # The AI gives us "Women Silver Pendant"
+                        raw_query = args.get('keywords', args.get('query', 'Silver'))
+                        print(f"SEARCHING FOR: {raw_query}")
+                        
+                        all_products = []
+                        
+                        # A. Split query and search EACH word separately
+                        keywords_list = raw_query.split()
+                        
+                        # Filter out short/useless words
+                        ignore_words = ["for", "the", "and", "with", "gift", "present", "women", "mens"]
+                        clean_keywords = [k for k in keywords_list if len(k) > 2 and k.lower() not in ignore_words]
+                        
+                        # Ensure we search the main noun at least (e.g. "Pendant")
+                        if not clean_keywords: clean_keywords = keywords_list
 
-    all_products = []
-    
-    # STRATEGY 1: Split query and search EACH word separately
-    # "Modern Women Birthday" -> searches "Modern", then "Women", then "Birthday"
-    keywords = raw_query.split()
-    
-    # Filter: Remove short/useless words to save API calls
-    ignore_words = ["for", "the", "and", "with", "gift", "present"]
-    keywords = [k for k in keywords if len(k) > 2 and k.lower() not in ignore_words]
+                        for word in clean_keywords:
+                            found = ShopifyClient.search_product(word)
+                            if found:
+                                all_products.extend(found)
+                        
+                        # B. Fallback: If 0 results, search "Silver"
+                        if not all_products:
+                            print("No matches. Defaulting to Silver.")
+                            all_products = ShopifyClient.search_product("Silver")
 
-    for word in keywords:
-        found = ShopifyClient.search_product(word)
-        if found:
-            all_products.extend(found)
-            
-    # STRATEGY 2: If we found nothing yet, search "Silver" as a fallback
-    if not all_products:
-        print("No keyword matches. Defaulting to Silver.")
-        all_products = ShopifyClient.search_product("Silver")
+                        # C. Deduplicate
+                        unique_products = []
+                        seen_ids = set()
+                        for p in all_products:
+                            pid = p.get('id', p.get('title'))
+                            if pid not in seen_ids:
+                                unique_products.append(p)
+                                seen_ids.add(pid)
 
-    # STRATEGY 3: Deduplicate (Remove exact duplicates)
-    unique_products = []
-    seen_ids = set()
-    
-    for p in all_products:
-        # Use Product ID (or Title) to track uniqueness
-        pid = p.get('id', p.get('title'))
-        if pid not in seen_ids:
-            unique_products.append(p)
-            seen_ids.add(pid)
-    
-    # Limit to top 10 results to keep chat clean
-    final_results = unique_products[:10]
+                        # D. Limit to Top 5 (Keep chat clean)
+                        final_results = unique_products[:5]
+                        tool_result = BusinessLogic.format_product_link(raw_query, final_results)
+                        reply += f"<br><br>{tool_result}"
 
-    tool_result = BusinessLogic.format_product_link(raw_query, final_results)
+                    elif fn == "check_status":
+                        # Placeholder for status logic
+                        tool_result = "Please provide your Order ID and Email to check status."
+                        reply += f"<br>{tool_result}"
+
+                except Exception as tool_error:
+                    print(f"⚠️ TOOL ERROR: {tool_error}")
+                    reply += "<br>I found some beautiful items, but the link is acting shy. Please check our Collections page!"
+
+        return jsonify({"reply": reply})
+
+    except Exception as e:
+        print(f"🔥 CRITICAL SERVER ERROR: {e}")
+        return jsonify({"reply": "I'm having a brief technical moment. Please try asking for 'Silver Rings' directly!"})
