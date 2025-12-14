@@ -10,12 +10,9 @@ app = Flask(__name__)
 CORS(app)
 
 # 1. CONFIGURATION
-# Render uses these to connect
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-SHOPIFY_URL = os.environ.get("SHOPIFY_STORE_URL") # This should be: 1bp4n0-zv.myshopify.com
+SHOPIFY_URL = os.environ.get("SHOPIFY_STORE_URL") # 1bp4n0-zv.myshopify.com
 SHOPIFY_TOKEN = os.environ.get("SHOPIFY_ADMIN_TOKEN")
-
-# YOUR PUBLIC DOMAIN (Hardcoded to fix the link issue)
 PUBLIC_DOMAIN = "shelook.in"
 
 client = Groq(api_key=GROQ_API_KEY)
@@ -24,10 +21,14 @@ client = Groq(api_key=GROQ_API_KEY)
 def extract_details(text):
     email = None
     order_id = None
+    # Flexible email search
     email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', text)
     if email_match: email = email_match.group(0)
-    order_match = re.search(r'(SL\d+)', text, re.IGNORECASE)
-    if order_match: order_id = order_match.group(1).upper()
+    # Flexible Order ID search (SL 1001 or SL1001)
+    order_match = re.search(r'(SL\s*\d+)', text, re.IGNORECASE)
+    if order_match: 
+        # Remove spaces so "SL 1001" becomes "SL1001"
+        order_id = order_match.group(1).upper().replace(" ", "")
     return email, order_id
 
 def get_shopify_headers():
@@ -36,60 +37,95 @@ def get_shopify_headers():
 # 3. TOOLS
 
 def find_product_link(query):
-    # Search Shopify for the product
+    # Fuzzy search for product
     url = f"https://{SHOPIFY_URL}/admin/api/2024-01/products.json?title={query}"
     try:
         response = requests.get(url, headers=get_shopify_headers())
-        data = response.json()
-        products = data.get('products', [])
+        products = response.json().get('products', [])
         
-        # If no exact match, return a General Search Link
         if not products:
             search_url = f"https://{PUBLIC_DOMAIN}/search?q={query}"
-            # Returns a clickable HTML link
-            return f"I couldn't find an exact match, but you can browse our <b>{query} collection</b> here: <br><a href='{search_url}' target='_blank' style='color:blue; text-decoration:underline;'>View {query} Collection</a>"
+            return f"I couldn't find an exact match for '{query}', but you can browse our collection here: <br><a href='{search_url}' target='_blank' style='color:blue; text-decoration:underline;'>View {query} Collection</a>"
             
-        # If product found, create a direct link
         product = products[0]
         product_url = f"https://{PUBLIC_DOMAIN}/products/{product['handle']}"
-        
-        # Returns a nice clickable HTML link
-        return f"I recommend our <b>{product['title']}</b>. <br><br>👉 <a href='{product_url}' target='_blank' style='background:#000; color:#fff; padding:5px 10px; border-radius:15px; text-decoration:none;'>View Product</a>"
+        image_url = ""
+        if product.get('image'):
+            image_url = product['image']['src']
+
+        # Returns HTML with Image (if available) and Button
+        html = f"I recommend our <b>{product['title']}</b>.<br>"
+        if image_url:
+            html += f"<img src='{image_url}' style='width:100%; border-radius:8px; margin:10px 0;'><br>"
+        html += f"👉 <a href='{product_url}' target='_blank' style='background:#000; color:#fff; padding:8px 15px; border-radius:20px; text-decoration:none;'>View Product</a>"
+        return html
     except Exception as e:
-        print(f"Search Error: {e}")
-        return "I'm having trouble searching our catalog right now."
+        return "I'm having trouble searching the catalog right now."
 
 def check_status(order_id, user_email):
-    clean_id = order_id.replace(" ", "")
-    url = f"https://{SHOPIFY_URL}/admin/api/2024-01/orders.json?name={clean_id}&status=any"
+    # API Call to find order by name
+    url = f"https://{SHOPIFY_URL}/admin/api/2024-01/orders.json?name={order_id}&status=any"
     try:
         response = requests.get(url, headers=get_shopify_headers())
         data = response.json()
-        if not data.get('orders'): return f"I couldn't find Order {order_id}. Please check the number."
+        
+        if not data.get('orders'):
+            return f"I searched for **{order_id}** but found nothing. Please check if there is a space or typo."
             
         order = data['orders'][0]
         
-        # Email Validation
-        order_email = order.get('email') or ""
-        customer_email = order.get('customer', {}).get('email') or ""
+        # --- ROBUST EMAIL FINDER ---
+        # We check 3 different fields where Shopify might hide the email
+        found_emails = []
         
-        if user_email.lower().strip() not in [order_email.lower(), customer_email.lower()]:
-             return "⚠️ **Security Alert:** The email provided does not match this order. Please contact support@shelook.com."
+        # 1. Direct Email
+        if order.get('email'): found_emails.append(order.get('email').lower().strip())
+        
+        # 2. Contact Email
+        if order.get('contact_email'): found_emails.append(order.get('contact_email').lower().strip())
+        
+        # 3. Customer Record Email (Handle cases where customer is null)
+        if order.get('customer') and order['customer'].get('email'):
+            found_emails.append(order['customer']['email'].lower().strip())
+            
+        # Clean User Input
+        input_email = user_email.lower().strip()
+        
+        # The Check
+        if input_email not in found_emails:
+            # SECURITY: Mask the email found to show user the hint without exposing full data
+            hint = "No email found on order"
+            if found_emails:
+                real = found_emails[0]
+                # Show first 2 chars and domain (e.g. su****@gmail.com)
+                mask_at = real.find('@')
+                if mask_at > 2:
+                    hint = f"{real[:2]}****{real[mask_at:]}"
+                else:
+                    hint = "****" + real[mask_at:]
+            
+            return f"⚠️ **Mismatch:** The email you entered ({user_email}) does not match our records for {order_id}.<br>The order is linked to: **{hint}**."
 
+        # Status Logic
         status = order.get('fulfillment_status') or "Unfulfilled"
-        tracking = "No tracking info yet."
+        financial = order.get('financial_status') or "Pending"
+        
+        tracking_html = "No tracking info yet."
         if order.get('fulfillments'):
             t = order['fulfillments'][0]
             if t.get('tracking_url'):
-                tracking = f"<a href='{t.get('tracking_url')}' target='_blank'>Track Shipment</a>"
+                tracking_html = f"<a href='{t.get('tracking_url')}' target='_blank' style='color:blue; text-decoration:underline;'>Track Shipment</a>"
             else:
-                tracking = t.get('tracking_number') or "Shipped"
+                tracking_html = t.get('tracking_number') or "Shipped"
         
-        return f"📦 **Order {order['name']}**<br>Status: {status}<br>Tracking: {tracking}"
-    except: return "System error checking status."
+        return f"📦 **Order {order['name']}**<br>Payment: {financial}<br>Status: {status}<br>Tracking: {tracking_html}"
+
+    except Exception as e:
+        print(f"ERROR Checking Status: {e}")
+        return "I'm having a technical issue checking that order. Please try again."
 
 def cancel_order(order_id, user_email):
-     return "To cancel your order, please email us directly at <a href='mailto:support@shelook.com'>support@shelook.com</a> for immediate assistance."
+     return f"To cancel order {order_id}, please email us directly at <a href='mailto:support@shelook.com'>support@shelook.com</a>."
 
 # 4. CHAT ROUTE
 @app.route('/chat', methods=['POST'])
@@ -101,25 +137,22 @@ def chat():
         email = data.get('email') or extract_details(msg)[0]
         order_id = data.get('orderId') or extract_details(msg)[1]
 
-        # SYSTEM PROMPT
         system_prompt = f"""
         You are the SHELOOK Jewelry Assistant.
         
         RULES:
-        1. **Product Recommendations:** - If the user asks for a product (e.g., "anklet", "ring"), ALWAYS use the 'find_product_link' tool.
-           - Do NOT provide a text URL yourself. Let the tool generate the clickable link.
-           
-        2. **Order Status:** - User needs Order ID AND Email.
+        1. **Product Search:** ALWAYS use 'find_product_link' if user mentions a jewelry type (ring, anklet, etc).
+        2. **Order Check:** User needs Order ID AND Email.
            - If missing, ask for them politely.
-           
-        3. **Style:** Keep answers short. Use HTML for formatting if needed.
+           - Once you have both, call 'check_status'.
+        3. **Format:** Use HTML for bolding and links.
 
         Context: Email={email}, OrderID={order_id}
         """
 
         tools = [
             {"type": "function", "function": {"name": "check_status", "description": "Check status", "parameters": {"type": "object", "properties": {"user_email": {"type": "string"}}, "required": ["user_email"]}}},
-            {"type": "function", "function": {"name": "find_product_link", "description": "Search product and return clickable link", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}}
+            {"type": "function", "function": {"name": "find_product_link", "description": "Search product", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}}
         ]
 
         completion = client.chat.completions.create(
@@ -146,7 +179,6 @@ def chat():
         return jsonify({"reply": reply, "found_email": email, "found_orderId": order_id})
         
     except Exception as e:
-        print(f"CRITICAL ERROR: {e}")
         return jsonify({"reply": "I'm having a brief technical moment. Please try again."})
 
 if __name__ == '__main__':
