@@ -36,7 +36,6 @@ def extract_details(text):
 
 # 3. SHOPIFY TOOLS
 def get_shopify_order(order_id):
-    # Remove any spaces just in case
     clean_id = order_id.replace(" ", "")
     url = f"https://{SHOPIFY_URL}/admin/api/2024-01/orders.json?name={clean_id}&status=any"
     headers = {"X-Shopify-Access-Token": SHOPIFY_TOKEN}
@@ -49,27 +48,34 @@ def get_shopify_order(order_id):
 
 def check_status(order_id):
     order = get_shopify_order(order_id)
-    if not order: return f"I looked for Order {order_id} but couldn't find it in our system. Please check the number."
+    if not order: return f"I looked for Order {order_id} but couldn't find it. Please double-check the ID."
     
-    status = order.get('fulfillment_status') or "Unfulfilled"
-    tracking = "No tracking info yet."
+    status = order.get('fulfillment_status') or "Unfulfilled (Processing)"
+    financial = order.get('financial_status')
+    
+    tracking_msg = "No tracking info yet."
     if order.get('fulfillments'):
         t = order['fulfillments'][0]
-        tracking = t.get('tracking_url') or f"Tracking Number: {t.get('tracking_number')}"
+        if t.get('tracking_url'):
+            tracking_msg = f"Tracking Link: {t.get('tracking_url')}"
+        elif t.get('tracking_number'):
+            tracking_msg = f"Tracking Number: {t.get('tracking_number')}"
     
-    return f"📦 **Order {order['name']}**\n- Status: {status}\n- {tracking}"
+    return f"📦 **Order {order['name']}**\n- Status: {status}\n- Payment: {financial}\n- {tracking_msg}"
 
 def cancel_order(order_id):
     order = get_shopify_order(order_id)
     if not order: return "Order not found."
+    
+    # POLICY: Cannot cancel if shipped
     if order.get('fulfillment_status') == 'fulfilled':
-        return "⚠️ Failed: Order already shipped. Cannot cancel."
+        return "⚠️ **Cancellation Failed:**\nYour order has already been shipped. We cannot cancel it now. Please reach out to us for a return after delivery: support@shelook.com"
     
     try:
         url = f"https://{SHOPIFY_URL}/admin/api/2024-01/orders/{order['id']}/cancel.json"
         requests.post(url, headers={"X-Shopify-Access-Token": SHOPIFY_TOKEN}, json={})
-        return "✅ Success: Order cancelled and refund processed."
-    except: return "❌ Technical error while cancelling."
+        return "✅ **Success:** Your order has been cancelled and a refund is being processed."
+    except: return "❌ Technical error. Please contact support@shelook.com."
 
 # 4. CHAT ROUTE
 @app.route('/chat', methods=['POST'])
@@ -77,42 +83,44 @@ def chat():
     data = request.json
     msg = data.get('message', '')
     
-    # A. Get Context from Frontend OR Text
+    # Context Logic
     email_in_payload = data.get('email')
     order_in_payload = data.get('orderId')
-    
-    # B. Run Backup Extraction (If frontend sent nothing, maybe text has it)
     extracted_email, extracted_order = extract_details(msg)
     
-    # C. Finalize Variables
     email = email_in_payload or extracted_email
     order_id = order_in_payload or extracted_order
 
-    # D. Strict System Prompt
+    # SYSTEM PROMPT (The Personality)
     system_prompt = f"""
-    You are the SHELOOK Jewelry Support Bot.
+    You are the SHELOOK Jewelry Support Assistant.
     
-    STRICT RULES:
-    1. NEVER say "I am a large language model".
-    2. If user asks about Order Status/Tracking/Cancel:
-       - CHECK: Do I have the Order ID? (Current value: {order_id})
-       - IF Missing ID: Ask "Please provide your Order ID (starts with SL)."
-       - IF Have ID: IMMEDIATEY use the tool 'check_status' or 'cancel_order'.
-    3. General questions (silver care, styling): Answer politely.
+    **YOUR RULES:**
+    1. **Strict Tasks:** If the user asks for Status, Tracking, or Cancel:
+       - CHECK: Do you have the Order ID? (Current: {order_id})
+       - IF YES -> Call tool 'check_status' or 'cancel_order' IMMEDIATELY.
+       - IF NO -> Ask: "Please provide your Order ID (starts with SL)."
     
+    2. **General Qs:** Answer questions about silver, jewelry care, and style briefly and politely.
+    
+    3. **Unknowns:** If you are NOT sure about an answer (e.g., specific manufacturing details, complex return cases), do NOT guess.
+       - SAY EXACTLY: "I'm not sure about that, but our team can help! Please contact us at **support@shelook.com**."
+       
+    4. **Identity:** Never say "I am a language model". Say "I am the SHELOOK Assistant".
+
     Current User Email: {email}
     Current Order ID: {order_id}
     """
 
     tools = [
-        {"type": "function", "function": {"name": "check_status", "description": "Get status", "parameters": {"type": "object", "properties": {}}}},
+        {"type": "function", "function": {"name": "check_status", "description": "Get status/tracking", "parameters": {"type": "object", "properties": {}}}},
         {"type": "function", "function": {"name": "cancel_order", "description": "Cancel order", "parameters": {"type": "object", "properties": {}}}}
     ]
 
     try:
         completion = client.chat.completions.create(
             messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": msg}],
-            model="llama-3.3-70b-versatile", # <--- NEW MODEL
+            model="llama-3.3-70b-versatile",
             tools=tools,
             tool_choice="auto"
         )
@@ -122,7 +130,7 @@ def chat():
 
         if tool_calls:
             if not order_id: 
-                reply = "I can check that for you, but I need your Order ID (e.g., SL1001) first."
+                reply = "I can help with that, but I need your Order ID (e.g., SL1001) first."
             else:
                 fn = tool_calls[0].function.name
                 if fn == "check_status": reply = check_status(order_id)
@@ -130,13 +138,12 @@ def chat():
 
         return jsonify({
             "reply": reply,
-            # We send these back so the Frontend can remember them!
             "found_email": email, 
             "found_orderId": order_id
         })
         
     except Exception as e:
-        return jsonify({"reply": f"System Error: {str(e)}"})
+        return jsonify({"reply": "I'm having a brief technical moment. Please try again or email support@shelook.com."})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
