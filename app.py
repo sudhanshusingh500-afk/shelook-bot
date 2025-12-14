@@ -183,35 +183,44 @@ def chat():
                 try:
                     args = json.loads(tool.function.arguments)
                     
-                    if fn == "find_product":
-                        # The AI gives us "Women Silver Pendant"
-                        raw_query = args.get('keywords', 'Silver')
-                        print(f"SEARCHING FOR: {raw_query}") # Log this!
-                        
-                        # Search directly
-                        prods = ShopifyClient.search_product(raw_query)
-                        
-                        # Fallback: If 0 results, search just the LAST word (e.g., "Pendant")
-                        if not prods:
-                            fallback = raw_query.split()[-1]
-                            print(f"Fallback Search: {fallback}")
-                            prods = ShopifyClient.search_product(fallback)
+                   # Inside your chat() function, under "if tool_calls:"
 
-                        tool_result = BusinessLogic.format_product_link(raw_query, prods)
-                        reply += f"<br><br>{tool_result}"
+if fn == "find_product":
+    raw_query = args.get('query', '')
+    print(f"Original Query: {raw_query}")
 
-                    elif fn == "check_status":
-                        # (Keep your existing status logic here if needed)
-                        tool_result = "Please provide Order ID and Email."
-                        reply += f"<br>{tool_result}"
+    all_products = []
+    
+    # STRATEGY 1: Split query and search EACH word separately
+    # "Modern Women Birthday" -> searches "Modern", then "Women", then "Birthday"
+    keywords = raw_query.split()
+    
+    # Filter: Remove short/useless words to save API calls
+    ignore_words = ["for", "the", "and", "with", "gift", "present"]
+    keywords = [k for k in keywords if len(k) > 2 and k.lower() not in ignore_words]
 
-                except Exception as tool_error:
-                    print(f"⚠️ TOOL ERROR: {tool_error}") # Print error to Render Logs
-                    reply += "<br>I found some beautiful items, but the link is shy. Check our 'Best Sellers' page!"
+    for word in keywords:
+        found = ShopifyClient.search_product(word)
+        if found:
+            all_products.extend(found)
+            
+    # STRATEGY 2: If we found nothing yet, search "Silver" as a fallback
+    if not all_products:
+        print("No keyword matches. Defaulting to Silver.")
+        all_products = ShopifyClient.search_product("Silver")
 
-        return jsonify({"reply": reply})
+    # STRATEGY 3: Deduplicate (Remove exact duplicates)
+    unique_products = []
+    seen_ids = set()
+    
+    for p in all_products:
+        # Use Product ID (or Title) to track uniqueness
+        pid = p.get('id', p.get('title'))
+        if pid not in seen_ids:
+            unique_products.append(p)
+            seen_ids.add(pid)
+    
+    # Limit to top 10 results to keep chat clean
+    final_results = unique_products[:10]
 
-    except Exception as e:
-        print(f"🔥 CRITICAL SERVER ERROR: {e}") # This shows in your Render Dashboard
-        # Return a friendly fallback instead of crashing
-        return jsonify({"reply": "I'm checking our inventory... try asking for 'Silver Rings' directly!"})
+    tool_result = BusinessLogic.format_product_link(raw_query, final_results)
