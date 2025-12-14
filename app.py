@@ -118,13 +118,15 @@ class BusinessLogic:
         return f"📦 **Order {order['name']}**<br>Payment: {financial}<br>Status: {status}<br>Tracking: {track_link}"
 
 # ==========================================
-# BLOCK 4: MAIN APP ROUTE (Updated: Gift "Who" & Ring Link Fix)
+# BLOCK 4: MAIN APP ROUTE (Fixed: Added History/Memory)
 # ==========================================
 @app.route('/chat', methods=['POST'])
 def chat():
     try:
         data = request.json
         msg = data.get('message', '')
+        # FIX: Get conversation history from the frontend request
+        history = data.get('history', []) 
         
         # 1. Extract Details
         extracted_email = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', msg)
@@ -140,7 +142,7 @@ def chat():
             {"type": "function", "function": {"name": "cancel_order", "description": "Cancel order", "parameters": {"type": "object", "properties": {"user_email": {"type": "string"}}, "required": ["user_email"]}}}
         ]
 
-        # 3. System Prompt (THE BRAIN UPGRADE)
+        # 3. System Prompt
         system_prompt = f"""
         You are the SHELOOK Jewelry Assistant and Stylist.
 
@@ -166,19 +168,22 @@ def chat():
         **GENERAL:** Use HTML formatting. Context: Email={email}, OrderID={order_id}
         """
 
-        # 4. AI Call
+        # 4. Construct Message List with History
+        # We start with System Prompt, then add History, then add Current Message
+        messages_payload = [{"role": "system", "content": system_prompt}] + history + [{"role": "user", "content": msg}]
+
+        # 5. AI Call
         completion = client.chat.completions.create(
-            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": msg}],
+            messages=messages_payload,
             model="llama-3.3-70b-versatile",
             tools=tools,
             tool_choice="auto"
         )
         
-        # Start with text reply
         reply = completion.choices[0].message.content or ""
         tool_calls = completion.choices[0].message.tool_calls
 
-        # 5. Tool Execution Logic
+        # 6. Tool Execution Logic
         if tool_calls:
             for tool in tool_calls:
                 fn = tool.function.name
@@ -223,6 +228,3 @@ def chat():
     except Exception as e:
         print(f"CRITICAL SERVER ERROR: {e}")
         return jsonify({"reply": "I'm having a brief technical moment. Please try again."})
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=10000)
