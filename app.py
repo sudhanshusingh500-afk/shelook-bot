@@ -118,14 +118,13 @@ class BusinessLogic:
         return f"📦 **Order {order['name']}**<br>Payment: {financial}<br>Status: {status}<br>Tracking: {track_link}"
 
 # ==========================================
-# BLOCK 4: MAIN APP ROUTE (Fixed: Added History/Memory)
+# BLOCK 4: MAIN APP ROUTE (Fixed: Broad Search "Any Match")
 # ==========================================
 @app.route('/chat', methods=['POST'])
 def chat():
     try:
         data = request.json
         msg = data.get('message', '')
-        # FIX: Get conversation history from the frontend request
         history = data.get('history', []) 
         
         # 1. Extract Details
@@ -142,25 +141,24 @@ def chat():
             {"type": "function", "function": {"name": "cancel_order", "description": "Cancel order", "parameters": {"type": "object", "properties": {"user_email": {"type": "string"}}, "required": ["user_email"]}}}
         ]
 
-        # 3. System Prompt
+        # 3. System Prompt (Simplified)
         system_prompt = f"""
-        You are the SHELOOK Jewelry Assistant and Stylist.
+        You are the SHELOOK Jewelry Assistant.
 
-        **PHASE 1: THE GIFT FINDER (Step-by-Step Flow)**
+        **PHASE 1: THE GIFT FINDER**
         If user mentions "Gift", START this sequence. Ask ONE question at a time.
         
-        1. **Step 1 (Budget):** If unknown, ask: "I'd love to help! First, what is your budget?"
-        2. **Step 2 (Who):** If unknown, ask: "Is this gift for a **Man** or a **Woman**?"
-        3. **Step 3 (Occasion):** If unknown, ask: "What is the occasion (e.g., Birthday, Anniversary)?"
-        4. **Step 4 (Style):** If unknown, ask: "Last question: Are you looking for Modern or Traditional style?"
-        5. **Step 5 (Results):** Once you have ALL 4:
-           - Create a query (e.g., "Men Silver Ring" or "Traditional Women Jhumka").
-           - Call 'find_product' with that query.
+        1. **Step 1 (Budget):** If unknown, ask budget.
+        2. **Step 2 (Who):** If unknown, ask "Man or Woman?".
+        3. **Step 3 (Occasion):** If unknown, ask occasion.
+        4. **Step 4 (Style):** If unknown, ask "Modern or Traditional?".
+        5. **Step 5 (Results):** Once you have all 4, call 'find_product'.
+           - Create a query string with KEYWORDS ONLY.
+           - Example: "Women Silver Ring Modern" or "Men Chain Oxidized".
 
         **PHASE 2: SALES & STYLING:**
-        - **Cross-Selling:** If user asks for Necklace, suggest matching Earrings. Call 'find_product' TWICE.
-        - **Ring Sizing:** 1. Explain the "Thread Method" briefly.
-           2. **CRITICAL:** You MUST call 'find_product' with query="Adjustable Ring" to show them as an alternative.
+        - **Cross-Selling:** Suggest matching items.
+        - **Ring Sizing:** Explain thread method. MUST call 'find_product' with query="Adjustable Ring".
 
         **PHASE 3: ORDER TASKS:**
         - Ask for Order ID -> Wait -> Ask for Email -> Wait.
@@ -168,8 +166,7 @@ def chat():
         **GENERAL:** Use HTML formatting. Context: Email={email}, OrderID={order_id}
         """
 
-        # 4. Construct Message List with History
-        # We start with System Prompt, then add History, then add Current Message
+        # 4. Construct Message List
         messages_payload = [{"role": "system", "content": system_prompt}] + history + [{"role": "user", "content": msg}]
 
         # 5. AI Call
@@ -183,7 +180,7 @@ def chat():
         reply = completion.choices[0].message.content or ""
         tool_calls = completion.choices[0].message.tool_calls
 
-        # 6. Tool Execution Logic
+        # 6. Tool Execution Logic (BROAD MATCH UPDATE)
         if tool_calls:
             for tool in tool_calls:
                 fn = tool.function.name
@@ -192,8 +189,46 @@ def chat():
                 
                 try:
                     if fn == "find_product":
-                        prods = ShopifyClient.search_product(args.get('query'))
-                        tool_result = BusinessLogic.format_product_link(args.get('query'), prods)
+                        query_str = args.get('query', '')
+                        all_prods = []
+                        
+                        # A. Split query into individual words (e.g. "Modern Women" -> ["Modern", "Women"])
+                        keywords = query_str.split()
+                        
+                        # Filter out short words like "for", "a", "in" to save API calls
+                        keywords = [k for k in keywords if len(k) > 2]
+                        
+                        # B. Search for EACH word separately
+                        print(f"Searching keywords: {keywords}")
+                        for word in keywords:
+                            found = ShopifyClient.search_product(word)
+                            if found:
+                                all_prods.extend(found)
+                        
+                        # C. Search the Full Phrase too (just in case strict match is better)
+                        full_match = ShopifyClient.search_product(query_str)
+                        if full_match:
+                            all_prods.extend(full_match)
+
+                        # D. Deduplicate (Remove identical products)
+                        unique_prods = []
+                        seen_ids = set()
+                        for p in all_prods:
+                            # Use product ID if available, else use Title as unique key
+                            p_id = p.get('id', p.get('title'))
+                            if p_id not in seen_ids:
+                                unique_prods.append(p)
+                                seen_ids.add(p_id)
+
+                        # E. Limit results (Top 10 to keep it clean)
+                        final_list = unique_prods[:10]
+
+                        # F. Final Fallback (If literally nothing matched any word)
+                        if not final_list:
+                             print("Zero matches for any keyword. Defaulting to 'Silver'.")
+                             final_list = ShopifyClient.search_product("Silver")
+
+                        tool_result = BusinessLogic.format_product_link(query_str, final_list)
                     
                     elif fn == "check_status":
                         if not order_id: tool_result = "Please provide your Order ID first."
