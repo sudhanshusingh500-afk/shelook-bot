@@ -27,7 +27,7 @@ def chat():
         # 2. Try to talk to Groq
         completion = client.chat.completions.create(
             messages=[{"role": "user", "content": msg}],
-            model="llama3-70b-8192"
+            model="llama-3.3-70b-versatile"
         )
         return jsonify({"reply": completion.choices[0].message.content})
 
@@ -37,3 +37,4 @@ def chat():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
+
