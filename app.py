@@ -118,7 +118,7 @@ class BusinessLogic:
         return f"📦 **Order {order['name']}**<br>Payment: {financial}<br>Status: {status}<br>Tracking: {track_link}"
 
 # ==========================================
-# BLOCK 4: MAIN APP ROUTE (Fixed for Multi-Tasking)
+# BLOCK 4: MAIN APP ROUTE (Updated: Gift "Who" & Ring Link Fix)
 # ==========================================
 @app.route('/chat', methods=['POST'])
 def chat():
@@ -140,23 +140,30 @@ def chat():
             {"type": "function", "function": {"name": "cancel_order", "description": "Cancel order", "parameters": {"type": "object", "properties": {"user_email": {"type": "string"}}, "required": ["user_email"]}}}
         ]
 
-        # 3. System Prompt (Phase 1: Stylist)
+        # 3. System Prompt (THE BRAIN UPGRADE)
         system_prompt = f"""
-        You are the SHELOOK Jewelry Assistant.
-        
-        **PHASE 1: SALES & STYLING RULES:**
-        1. **Cross-Selling:** - If user asks for **Necklace**, suggest it AND matching **Earrings/Jhumkas**.
-           - Call 'find_product' TWICE (once for necklace, once for earrings).
-           
-        2. **Gift Finder:** - If user says "Gift", Ask: Budget, Occasion, Style?
-           
-        3. **Ring Sizing:** - Explain "Thread Method". ALWAYS suggest "Adjustable Rings".
+        You are the SHELOOK Jewelry Assistant and Stylist.
 
-        **ORDER RULES:** - Ask for Order ID -> Wait -> Ask for Email -> Wait.
-
-        **GENERAL:** - Use HTML. Be brief.
+        **PHASE 1: THE GIFT FINDER (Step-by-Step Flow)**
+        If user mentions "Gift", START this sequence. Ask ONE question at a time.
         
-        Context: Email={email}, OrderID={order_id}
+        1. **Step 1 (Budget):** If unknown, ask: "I'd love to help! First, what is your budget?"
+        2. **Step 2 (Who):** If unknown, ask: "Is this gift for a **Man** or a **Woman**?"
+        3. **Step 3 (Occasion):** If unknown, ask: "What is the occasion (e.g., Birthday, Anniversary)?"
+        4. **Step 4 (Style):** If unknown, ask: "Last question: Are you looking for Modern or Traditional style?"
+        5. **Step 5 (Results):** Once you have ALL 4:
+           - Create a query (e.g., "Men Silver Ring" or "Traditional Women Jhumka").
+           - Call 'find_product' with that query.
+
+        **PHASE 2: SALES & STYLING:**
+        - **Cross-Selling:** If user asks for Necklace, suggest matching Earrings. Call 'find_product' TWICE.
+        - **Ring Sizing:** 1. Explain the "Thread Method" briefly.
+           2. **CRITICAL:** You MUST call 'find_product' with query="Adjustable Ring" to show them as an alternative.
+
+        **PHASE 3: ORDER TASKS:**
+        - Ask for Order ID -> Wait -> Ask for Email -> Wait.
+
+        **GENERAL:** Use HTML formatting. Context: Email={email}, OrderID={order_id}
         """
 
         # 4. AI Call
@@ -167,11 +174,11 @@ def chat():
             tool_choice="auto"
         )
         
-        # Start with any text the AI wanted to say
+        # Start with text reply
         reply = completion.choices[0].message.content or ""
         tool_calls = completion.choices[0].message.tool_calls
 
-        # 5. Tool Execution Logic (NOW SUPPORTS MULTIPLE TOOLS)
+        # 5. Tool Execution Logic
         if tool_calls:
             for tool in tool_calls:
                 fn = tool.function.name
@@ -205,19 +212,17 @@ def chat():
                                 if is_allowed: tool_result = f"To cancel Order {order_id}, please email support@shelook.com."
                                 else: tool_result = "⚠️ **Security Alert:** Email mismatch. Cannot process cancellation."
                     
-                    # Add the tool result to the reply with a line break
                     reply += f"<br><br>{tool_result}"
                     
                 except Exception as tool_err:
                     print(f"Tool Error ({fn}): {tool_err}")
-                    reply += f"<br>I had trouble finding info for '{args.get('query', 'request')}'. "
+                    reply += f"<br>I couldn't find specific info for that."
 
         return jsonify({"reply": reply, "found_email": email, "found_orderId": order_id})
 
     except Exception as e:
-        # This prints the REAL error to Render Logs if it crashes
         print(f"CRITICAL SERVER ERROR: {e}")
-        return jsonify({"reply": f"I'm having a brief technical moment. (Error: {str(e)})"})
+        return jsonify({"reply": "I'm having a brief technical moment. Please try again."})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
